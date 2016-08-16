@@ -1,0 +1,148 @@
+---
+title: 'Explore the NOAA Storm Database for Severe Weather Events'
+author: "Sohail Munir Khan"
+date: "20 July 2015"
+output: html_document
+keep_md: true
+---
+
+##Synopsis
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.  
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.  
+
+The data for this project is downloaded from web location: [Storm Data] [1]  
+
+The events in the database start in the year 1950 and end in November 2011.
+
+## Data Processing
+
+read.csv can process bz2 compressed file. Warning: It takes quite a bit of time to process and retrieve `raw_stormdata`  
+PROPDMGEXP and CROPDMGEXP are measurements scaling values. Some of them are incorrect like '-', '?' and '+' which have been calculated as Zero values. Other values have been translated by using these variables' transaltion (see exp_map_func function) and PROPDMG, CROPDMG values to get PROPVAL and CROPVAL respectively
+
+```{r, echo=TRUE}
+stormDataZipfile <- "repdata-data-StormData.csv.bz2"
+raw_stormdata <- read.csv(stormDataZipfile)
+
+# Showing the Dimension for our raw Storm Data
+dim(raw_stormdata)
+
+# Showing important variables that we will use for our analysis
+head(raw_stormdata[,c("EVTYPE","FATALITIES","INJURIES","PROPDMG","PROPDMGEXP","CROPDMG","CROPDMGEXP")])
+
+# Showing the unique values from xxDMGEXP variables for both PROP and CROP that we have to convert
+unique(raw_stormdata$CROPDMGEXP)
+unique(raw_stormdata$PROPDMGEXP)
+
+# Map from xxDMGEXP value to its correct multiplier to be multiplied with xxDMG to get xxVAL
+exp_map_func <- function(expr) {
+  ifelse(expr=='', 1,
+  ifelse(expr=='0', 1e0,
+  ifelse(expr=='1', 1e1,
+  ifelse(expr=='2', 1e2,
+  ifelse(expr=='3', 1e3,
+  ifelse(expr=='4', 1e4,
+  ifelse(expr=='5', 1e5,
+  ifelse(expr=='6', 1e6,
+  ifelse(expr=='7', 1e7,
+  ifelse(expr=='8', 1e8,
+  ifelse(expr=='b' | expr=='B', 1e9,
+  ifelse(expr=='h' | expr=='H', 1e2,
+  ifelse(expr=='k' | expr=='K', 1e3,
+  ifelse(expr=='m' | expr=='M', 1e6,
+         0 )))))))))))))) # '-', '?', '+' as well anything else will be translated to a 0 xxVAL
+}
+
+# Calculate the xxVAL columns by converting xxDMGEXP values and multiplying it with xxPROPDMG or xxCROPDMP variables
+raw_stormdata$PROPVAL <- raw_stormdata$PROPDMG * exp_map_func(raw_stormdata$PROPDMGEXP)
+raw_stormdata$CROPVAL <- raw_stormdata$CROPDMG * exp_map_func(raw_stormdata$CROPDMGEXP)
+
+# Install "dplyr" package if required.
+dplyrPackage <- "dplyr"
+if (!dplyrPackage %in% installed.packages()[,"Package"])
+    install.packages(dplyrPackage, 
+                     repos="http://cran.rstudio.com/")
+
+# Load "dplyr" package needed to group data to summarize
+library(dplyr, warn.conflicts = FALSE)
+
+# Retrieved the variables that contain the information about Health(FATALITIES, INJURIES) and Ecomonic(PROPDMG, CROPDMG) Impact along with our EVTYPE variable
+imptdf <- tbl_df(raw_stormdata[,c("EVTYPE","FATALITIES","INJURIES","PROPVAL","PROPDMG","PROPDMGEXP","CROPVAL","CROPDMG","CROPDMGEXP")])
+# Showing some values that confirm that xxVAL variables are correctly calculated
+imptdf[imptdf$CROPDMG!=0,]
+
+# Select only the variables that are needed
+valuetdf <- imptdf %>% select(EVTYPE, FATALITIES, INJURIES, PROPVAL, CROPVAL)
+```
+
+## Results
+
+All grouping of data is based off of 'EVTYPE' variable  
+Each of the FATALITIES, INJURIES, PROPVAL, CROPVAL have been individually summarised and top 10 results are shown  
+To answer our main question for Health (or most harmful), I have calculated a new summarised table that gets its stats from a new variable **10 * FATALITIES + INJURIES**. The reason has been discussed below but the top 10 of these will be used to answer our main analysis question about most harmful to population health  
+To answer our main question for Economic affects, I have calculated a new summarised table that gets its stats from a new variable **PROPVAL + CROPVAL**. The top 10 of these will be used to answer our main analysis question about economic consequences  
+
+```{r, echo=TRUE}
+# Install "ggplot2" package if required.
+ggplot2Package <- "ggplot2"
+if (!ggplot2Package %in% installed.packages()[,"Package"])
+    install.packages(ggplot2Package, 
+                     repos="http://cran.rstudio.com/")
+
+# Load "ggplot2" package needed to group data to summarize
+library(ggplot2, warn.conflicts = FALSE)
+
+# Group by our most important EVTYPE variable
+groupedtdf <- valuetdf %>% group_by(EVTYPE)
+
+# Showing the top 10 Fatalities by using groupedtdf and summarise to calculate top values
+fatalitiestdf <- groupedtdf %>% summarise(sumFatalities = sum(FATALITIES)) %>% arrange(desc(sumFatalities))
+fatalitiestdf[1:10,]
+
+# Showing the top 10 Injuries by using groupedtdf and summarise to calculate top values
+injuriestdf <- groupedtdf %>% summarise(sumInjuries = sum(INJURIES)) %>% arrange(desc(sumInjuries))
+injuriestdf[1:10,]
+
+# Creating a new temp healthtdf variable with the value (10 * FATALITIES + INJURIES) meaning we value FATALITIES as 10 times worse than INJURIES. Then showing the top 10 healthtdf indicators
+healthtdf <- groupedtdf %>% summarise(sumHealths = sum(10 * FATALITIES + INJURIES)) %>% arrange(desc(sumHealths))
+top_healthindicators <- healthtdf[1:10,]
+top_healthindicators
+
+# Plot top_healthindicators
+ggplot(data=top_healthindicators, aes(x=EVTYPE, y=sumHealths, fill=EVTYPE)) + geom_bar(stat="identity") + xlab("Event Type") + ylab("Count: Most Harmful to Health") + theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))
+```
+Questions:
+
+**- Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?  
+TORNADO, EXCESSIVE HEAT, LIGHTNING are the top 3 reasons. Others are shown in the plot above**
+
+```{r, echo=TRUE}
+# Showing the top 10 Injuries by using groupedtdf and summarise to calculate top values
+propvalstdf <- groupedtdf %>% summarise(sumPropvals = sum(PROPVAL)) %>% arrange(desc(sumPropvals))
+propvalstdf[1:10,]
+
+# Showing the top 10 Injuries by using groupedtdf and summarise to calculate top values
+cropvalstdf <- groupedtdf %>% summarise(sumCropvals = sum(CROPVAL)) %>% arrange(desc(sumCropvals))
+cropvalstdf[1:10,]
+
+# Creating a new temp economictdf variable with the value (PROPVAL + CROPVAL). Then showing the top 10 economictdf indicators by using groupedtdf and summarise to calculate top values
+economictdf <- groupedtdf %>% summarise(sumVals = sum(PROPVAL + CROPVAL)) %>% arrange(desc(sumVals))
+top_economicindicators <- economictdf[1:10,]
+top_economicindicators
+
+# Plot top_economicindicators
+ggplot(data=top_economicindicators, aes(x=EVTYPE, y=sumVals, fill=EVTYPE)) + geom_bar(stat="identity") + xlab("Event Type") + ylab("Count: Greatest Economic Consequences") + theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))
+```
+
+Question:
+
+**- Across the United States, which types of events have the greatest economic consequences?  
+FLOOD, HURRICANE/TYPHOON, TORNADO are the top 3 reasons. Others are shown in the plot above**
+
+
+
+
+
+[1]: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2 "Storm Data"
+[2]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf "Storm Data Documentation"
+[3]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf "FAQ"
